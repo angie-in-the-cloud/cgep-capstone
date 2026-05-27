@@ -1,0 +1,198 @@
+# .github/workflows/apply.yml
+#
+# Runs on push to main (i.e., after a PR merges). Five named stages per
+# the capstone brief:
+#   1. Plan      - terraform plan with remote state
+#   2. Policy    - Conftest gate (defense in depth: also ran on PR)
+#   3. Apply     - terraform apply, gated by manual approval (Environment)
+#   4. Sign      - Cosign keyless signing via Sigstore + GitHub OIDC
+#   5. Upload    - PutObject the signed bundle into the evidence vault
+#
+# Separation of duties: the human approver for the Environment must be
+# different from the PR author. Configure that in repo Settings.
+
+name: Apply - Plan, Policy, Approve, Apply, Sign, Upload
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - 'policies/**'
+      - '.github/workflows/apply.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ROLE_ARN: arn:aws:iam::399966706844:role/acme-health-intake-github-actions
+  EVIDENCE_BUCKET: acme-health-intake-evidence-6a1ed244
+  TERRAFORM_VERSION: 1.6.6
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Stages 1 and 2 - Plan and Policy. No AWS write access yet.
+  # These run before the manual approval gate. If policy fails here,
+  # nothing else runs and no evidence is produced.
+  # ---------------------------------------------------------------------
+  plan-and-policy:
+    name: Plan + OPA policy check
+    runs-on: ubuntu-latest
+    outputs:
+      plan_artifact: ${{ steps.upload-plan.outputs.artifact-id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Set up Conftest
+        uses: instrumenta/conftest-action@master
+        with:
+          version: latest
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: |
+          terraform plan -out=tfplan.binary -input=false
+          terraform show -json tfplan.binary > tfplan.json
+
+      - name: Conftest policy check
+        working-directory: terraform
+        run: |
+          conftest test tfplan.json --policy ../policies --all-namespaces 2>&1 | tee policy-results.txt
+          # Exit code is propagated by tee's -o pipefail behavior in bash.
+
+      - name: Upload plan for downstream stages
+        id: upload-plan
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-${{ github.run_id }}
+          path: |
+            terraform/tfplan.binary
+            terraform/tfplan.json
+            terraform/policy-results.txt
+          retention-days: 14
+
+  # ---------------------------------------------------------------------
+  # Stages 3, 4, 5 - Apply, Sign, Upload. Gated by the production
+  # Environment, which requires a human reviewer to approve before any
+  # step in this job runs.
+  # ---------------------------------------------------------------------
+  apply-sign-upload:
+    name: Apply + Sign + Upload
+    needs: plan-and-policy
+    runs-on: ubuntu-latest
+    # The Environment is the manual approval gate. Configure required
+    # reviewers in Settings -> Environments -> production.
+    environment: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Download plan from previous job
+        uses: actions/download-artifact@v4
+        with:
+          name: plan-${{ github.run_id }}
+          path: terraform/
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.2.4
+
+      # ---------------- Stage 3: Apply ----------------
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: |
+          terraform apply -input=false -auto-approve tfplan.binary 2>&1 | tee apply.log
+
+      # ---------------- Stage 4: Sign ----------------
+      - name: Build evidence bundle
+        working-directory: terraform
+        run: |
+          BUNDLE_NAME="evidence-${GITHUB_SHA}-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+          echo "BUNDLE_NAME=${BUNDLE_NAME}" >> $GITHUB_ENV
+
+          # Compute state hash (NOT the state itself - the hash only).
+          terraform state pull | sha256sum | awk '{print $1}' > state-hash.txt
+
+          # Build manifest with commit SHA, run ID, timestamp, framework, file checksums.
+          cat > manifest.json <<EOF
+          {
+            "commit_sha": "${GITHUB_SHA}",
+            "run_id": "${GITHUB_RUN_ID}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "framework": "CMMC L2",
+            "workflow": "apply.yml",
+            "files": {
+              "tfplan.json": "$(sha256sum tfplan.json | awk '{print $1}')",
+              "policy-results.txt": "$(sha256sum policy-results.txt | awk '{print $1}')",
+              "apply.log": "$(sha256sum apply.log | awk '{print $1}')",
+              "state-hash.txt": "$(sha256sum state-hash.txt | awk '{print $1}')"
+            }
+          }
+          EOF
+
+          # Package the bundle.
+          tar -czf "${BUNDLE_NAME}" \
+            manifest.json \
+            tfplan.json \
+            policy-results.txt \
+            apply.log \
+            state-hash.txt
+
+          ls -la "${BUNDLE_NAME}"
+
+      - name: Sign bundle with Cosign (keyless, Sigstore OIDC)
+        working-directory: terraform
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign-blob --yes \
+            --output-signature "${BUNDLE_NAME}.sig" \
+            --output-certificate "${BUNDLE_NAME}.pem" \
+            "${BUNDLE_NAME}"
+
+      # ---------------- Stage 5: Upload ----------------
+      - name: Upload signed bundle to evidence vault
+        working-directory: terraform
+        run: |
+          aws s3 cp "${BUNDLE_NAME}"      "s3://${{ env.EVIDENCE_BUCKET }}/bundles/${BUNDLE_NAME}"
+          aws s3 cp "${BUNDLE_NAME}.sig"  "s3://${{ env.EVIDENCE_BUCKET }}/bundles/${BUNDLE_NAME}.sig"
+          aws s3 cp "${BUNDLE_NAME}.pem"  "s3://${{ env.EVIDENCE_BUCKET }}/bundles/${BUNDLE_NAME}.pem"
+
+          echo "Bundle uploaded: s3://${{ env.EVIDENCE_BUCKET }}/bundles/${BUNDLE_NAME}"

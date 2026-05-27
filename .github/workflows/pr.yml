@@ -1,0 +1,73 @@
+# .github/workflows/pr.yml
+#
+# Runs on pull requests against main. Plans the Terraform and evaluates
+# the OPA policy suite against that plan. No AWS write permissions, no
+# apply - read-only assessment.
+#
+# Exit code is non-zero on policy violation. Combined with a required
+# status check on main (configured separately in branch protection),
+# this produces a fails-closed gate: non-compliant PRs cannot merge.
+
+name: PR - Plan and Policy Check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - 'policies/**'
+      - '.github/workflows/pr.yml'
+
+# OIDC needs write on id-token; everything else stays read.
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  plan-and-policy-check:
+    name: Plan + OPA policy check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::399966706844:role/acme-health-intake-github-actions
+          aws-region: us-east-1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Set up Conftest
+        uses: instrumenta/conftest-action@master
+        with:
+          version: latest
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: |
+          terraform plan -out=tfplan.binary -input=false
+          terraform show -json tfplan.binary > tfplan.json
+
+      - name: Conftest policy check
+        run: conftest test terraform/tfplan.json --policy policies --all-namespaces
+
+      - name: Upload plan artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: |
+            terraform/tfplan.binary
+            terraform/tfplan.json
+          retention-days: 14

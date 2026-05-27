@@ -1,4 +1,7 @@
 # evidence.tf
+# Object Lock COMPLIANCE/1-day decision is defended in WRITEUP.md:
+# COMPLIANCE mode for true audit-evidence immutability, 1-day retention
+# proportionate to capstone scope rather than production retention.
 # Layer 1 baseline — the evidence vault.
 # Every pipeline run lands a signed, timestamped bundle here. Object Lock
 # in COMPLIANCE mode makes those bundles immutable: once written, they

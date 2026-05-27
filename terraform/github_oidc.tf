@@ -31,7 +31,8 @@ resource "aws_iam_role" "github_actions" {
         StringLike = {
           "token.actions.githubusercontent.com:sub" = [
             "repo:angie-in-the-cloud/cgep-capstone:pull_request",
-            "repo:angie-in-the-cloud/cgep-capstone:ref:refs/heads/main"
+            "repo:angie-in-the-cloud/cgep-capstone:ref:refs/heads/main",
+            "repo:angie-in-the-cloud/cgep-capstone:environment:production"
           ]
         }
       }
@@ -113,6 +114,18 @@ resource "aws_iam_role_policy" "github_actions" {
           "s3:PutObjectLegalHold"
         ]
         Resource = "${aws_s3_bucket.evidence.arn}/*"
+      },
+      {
+        # Required to PutObject into the evidence vault, which is
+        # SSE-KMS encrypted with the CUI CMK. S3 calls GenerateDataKey
+        # on the writer's behalf during the upload.
+        Sid    = "EvidenceVaultKMS"
+        Effect = "Allow"
+        Action = [
+          "kms:GenerateDataKey",
+          "kms:Decrypt"
+        ]
+        Resource = aws_kms_key.cui.arn
       }
     ]
   })

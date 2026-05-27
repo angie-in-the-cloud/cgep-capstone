@@ -45,9 +45,12 @@ jobs:
           terraform_version: 1.6.6
 
       - name: Set up Conftest
-        uses: instrumenta/conftest-action@master
-        with:
-          version: latest
+        run: |
+          CONFTEST_VERSION="0.50.0"
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" -o conftest.tar.gz
+          tar xzf conftest.tar.gz
+          sudo mv conftest /usr/local/bin/
+          conftest --version
 
       - name: Terraform init
         working-directory: terraform

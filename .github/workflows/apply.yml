@@ -59,9 +59,12 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Set up Conftest
-        uses: instrumenta/conftest-action@master
-        with:
-          version: latest
+        run: |
+          CONFTEST_VERSION="0.50.0"
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" -o conftest.tar.gz
+          tar xzf conftest.tar.gz
+          sudo mv conftest /usr/local/bin/
+          conftest --version
 
       - name: Terraform init
         working-directory: terraform
@@ -76,8 +79,8 @@ jobs:
       - name: Conftest policy check
         working-directory: terraform
         run: |
+          set -o pipefail
           conftest test tfplan.json --policy ../policies --all-namespaces 2>&1 | tee policy-results.txt
-          # Exit code is propagated by tee's -o pipefail behavior in bash.
 
       - name: Upload plan for downstream stages
         id: upload-plan

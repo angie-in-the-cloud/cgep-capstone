@@ -13,6 +13,12 @@ terraform {
     random  = { source = "hashicorp/random", version = "~> 3.6" }
     archive = { source = "hashicorp/archive", version = "~> 2.4" }
   }
+  backend "s3" {
+    bucket  = "acme-health-intake-tfstate-adcb9741"
+    key     = "capstone/terraform.tfstate"
+    region  = "us-east-1"
+    encrypt = true
+  }
 }
 
 provider "aws" {
@@ -23,7 +29,7 @@ provider "aws" {
       Project   = "acme-health-intake"
       ManagedBy = "terraform"
       Workload  = "patient-intake-api"
-      DataClass = "phi"
+      DataClass = "cui"
     }
   }
 }
@@ -111,8 +117,11 @@ resource "aws_dynamodb_table" "intake" {
     type = "S"
   }
 
-  # No server_side_encryption block. Defaults to AWS-owned key.
-  # GAP-02: capstone learner expected to add this with a customer-owned key.
+  # GAP-02 closed: CUI under a customer-managed CMK, not the AWS-owned default.
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.cui.arn
+  }
 }
 
 ######################################################################
@@ -176,14 +185,39 @@ resource "aws_iam_role_policy" "lambda_inline" {
     Version = "2012-10-17"
     Statement = [
       {
+        # GAP-07 closed: scoped from dynamodb:* to the single action
+        # the handler calls (put_item).
+        Sid      = "DynamoDBWrite"
         Effect   = "Allow"
-        Action   = "dynamodb:*"
+        Action   = "dynamodb:PutItem"
         Resource = aws_dynamodb_table.intake.arn
       },
       {
+        # GAP-07 closed: scoped from s3:* to the single action
+        # the handler calls (put_object).
+        Sid      = "S3Upload"
         Effect   = "Allow"
-        Action   = "s3:*"
-        Resource = ["${aws_s3_bucket.uploads.arn}", "${aws_s3_bucket.uploads.arn}/*"]
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.uploads.arn}/*"
+      },
+      {
+        # Required by GAP-02 (CMK-encrypted table/bucket). Already
+        # least-privilege - left unchanged.
+        Sid    = "KMSDataKeys"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:GenerateDataKey"
+        ]
+        Resource = aws_kms_key.cui.arn
+      },
+      {
+        # Required by GAP-06: the Lambda's dead-letter config writes
+        # failed invocations to the intake DLQ.
+        Sid      = "DLQSend"
+        Effect   = "Allow"
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.intake_dlq.arn
       }
     ]
   })
@@ -205,8 +239,25 @@ resource "aws_lambda_function" "intake" {
     }
   }
 
-  # GAP-05: no vpc_config block. Learner expected to add one referencing
-  # aws_subnet.private[*] and a hardened security group.
+  # GAP-05 closed: Lambda runs inside the starter's VPC, private subnets.
+  vpc_config {
+    subnet_ids         = aws_subnet.private[*].id
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+
+  # GAP-06 closed: operational resilience.
+
+  # Dead-letter queue - failed async invocations land in SQS instead of
+  # being silently dropped, so a failed CUI submission is recoverable.
+  dead_letter_config {
+    target_arn = aws_sqs_queue.intake_dlq.arn
+  }
+
+  # X-Ray active tracing - records a trace of each invocation for
+  # monitoring and investigation.
+  tracing_config {
+    mode = "Active"
+  }
 }
 
 ######################################################################
@@ -237,7 +288,22 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.intake.id
   name        = "$default"
   auto_deploy = true
-  # GAP-08: no access_log_settings. Learner expected to wire CloudWatch logs.
+
+  # GAP-08 closed: access logging to CloudWatch.
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_access.arn
+    format = jsonencode({
+      requestId        = "$context.requestId"
+      ip               = "$context.identity.sourceIp"
+      requestTime      = "$context.requestTime"
+      httpMethod       = "$context.httpMethod"
+      routeKey         = "$context.routeKey"
+      status           = "$context.status"
+      protocol         = "$context.protocol"
+      responseLength   = "$context.responseLength"
+      integrationError = "$context.integrationErrorMessage"
+    })
+  }
 }
 
 resource "aws_lambda_permission" "apigw" {

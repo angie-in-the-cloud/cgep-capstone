@@ -3,14 +3,15 @@
 # These are NEW sibling resources that reference the starter by ID.
 # main.tf is not edited.
 
-# GAP-01 — bring the uploads bucket under the customer CMK (SSE-KMS).
+# GAP-01 DELIBERATELY REINTRODUCED for red-PR demonstration.
+# This downgrade from SSE-KMS (customer CMK) to SSE-S3 (AWS-managed)
+# violates SC.L2-3.13.11. The policy gate must block this PR.
 resource "aws_s3_bucket_server_side_encryption_configuration" "uploads" {
   bucket = aws_s3_bucket.uploads.id
 
   rule {
     apply_server_side_encryption_by_default {
-      sse_algorithm     = "aws:kms"
-      kms_master_key_id = aws_kms_key.cui.arn
+      sse_algorithm = "AES256"
     }
     bucket_key_enabled = true
   }

@@ -1,80 +1,96 @@
-# cgep-app-starter
+# Acme Health Patient Intake API — CGE-P Capstone
 
-> Patient Intake API for "Acme Health". The deliberately-flawed workload your **CGE-P capstone** wraps with GRC controls.
+This repository is my CGE-P capstone submission. It forks `GRCEngClub/cgep-app-starter` (the deliberately non-compliant Patient Intake API) and wraps it in four GRC layers: a Terraform baseline, an OPA Rego policy suite, a signed-evidence GitHub Actions pipeline, and an OSCAL component definition.
 
-## What this is
+**Primary framework:** CMMC Level 2 (NIST SP 800-171 Rev. 2)
 
-A minimal AWS workload: VPC, Lambda, API Gateway, DynamoDB, S3. It ingests patient intake submissions over HTTPS. Think of it as a system you have just inherited from an engineering team and been asked to make audit-defensible.
+For the full design write-up, see [`WRITEUP.md`](./WRITEUP.md).
 
-This repository ships **non-compliant on purpose**. Your job in the capstone is not to rewrite this app. Your job is to wrap it with the four CGE-P layers (Terraform GRC baseline, Rego policies, GitHub Actions evidence pipeline, OSCAL component) so the same workload becomes audit-defensible against HIPAA, SOC 2, and CMMC L2.
+---
 
-## The deploy gate
+## Verification
 
-If you cannot deploy this starter, you cannot pass the capstone. Real GRC engineers inherit working systems. Step zero is making the system run.
+### Layer 1 — Terraform baseline
 
 ```bash
-git clone https://github.com/GRCEngClub/cgep-app-starter
-cd cgep-app-starter
-
-# Confirm you're authenticated to the right account:
-make creds AWS_PROFILE=<your-sandbox-profile>
-
-make deploy AWS_PROFILE=<your-sandbox-profile>
-make test    AWS_PROFILE=<your-sandbox-profile>
+cd terraform
+terraform init
+terraform plan
 ```
 
-> **AWS SSO note:** if your profile is SSO-based, Terraform's AWS provider can fail to read it directly with `failed to find SSO session section`. The Makefile's `eval $(aws configure export-credentials)` pattern handles this. If you're running `terraform` commands by hand, do the same export first.
+Every gap from `GAPS.md` is closed. The plan includes:
 
-Expected output of `make test`:
+- `aws_kms_key.cui` — customer-managed CMK with rotation enabled
+- `aws_s3_bucket.evidence` with `aws_s3_bucket_object_lock_configuration.evidence` in COMPLIANCE mode
+- `aws_cloudtrail.main` — multi-region trail with log-file validation
+- Gap-closing overrides on the starter's S3 uploads bucket, DynamoDB table, Lambda function, IAM role, and API Gateway stage
 
-```json
-{
-    "submission_id": "f1e3...",
-    "status": "received"
-}
+### Layer 2 — Rego policy suite
+
+```bash
+opa test ./policies
 ```
 
-When you're done exploring: `make destroy`.
+Expected: `19/19 PASS` across five policies.
 
-## What you build on top
+To run the policies against the real plan:
 
-Fork the repo into your own `cgep-capstone` and add:
-
-1. **Layer 1 — GRC baseline (Terraform).** KMS keys, an S3 evidence vault with Object Lock, a CloudTrail trail. Bring this starter's data stores under your CMK.
-2. **Layer 2 — OPA policy suite (Rego).** Five or more policies that catch the named gaps in [GAPS.md](GAPS.md). Each policy maps to at least one control from the framework you choose.
-3. **Layer 3 — GitHub Actions pipeline.** Plan → Conftest gate → apply → Cosign sign → upload to vault.
-4. **Layer 4 — OSCAL component.** A `component-definition.json` describing how your governed system implements its controls.
-
-Full brief: `docs/labs/07_01_capstone_brief.md` in the course content repo.
-
-## Framework mapping is required
-
-Your capstone must declare a primary framework: **HIPAA Security Rule**, **SOC 2 Trust Services Criteria**, or **CMMC Level 2**. Every policy carries at least one control ID from your chosen framework. Your OSCAL component's `control-implementations` reference your framework's catalog.
-
-A starter mapping is in [FRAMEWORKS.md](FRAMEWORKS.md). It is not the only valid mapping. You're expected to defend yours.
-
-## Cost
-
-Roughly $0 if destroyed within an hour. Lambda + API Gateway + DynamoDB + S3 are all pay-per-use, and an empty deployment generates no traffic. CloudTrail (which you add) costs cents.
-
-## Layout
-
-```
-cgep-app-starter/
-├── README.md            # this file
-├── WORKLOAD.md          # what the API does
-├── GAPS.md              # the named flaws your policies must catch
-├── FRAMEWORKS.md        # HIPAA / SOC 2 / CMMC mapping primer
-├── Makefile             # make deploy | test | destroy
-├── terraform/
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   └── lambda/handler.py
-└── test/
-    └── intake.sh
+```bash
+cd terraform && terraform show -json tfplan.binary > tfplan.json
+conftest test tfplan.json --policy ../policies --all-namespaces
 ```
 
-## License
+Expected: `5/5 PASS`.
 
-MIT. Fork freely. Submissions remain learners' own work.
+### Layer 3 — GitHub Actions pipeline
+
+Two workflows under `.github/workflows/`:
+
+- `pr.yml` — runs Plan and Policy Check on every pull request
+- `apply.yml` — runs Plan, Policy Check, Apply (manual gate), Sign, and Upload on push to `main`
+
+Repository history shows the required two PRs:
+
+- **PR #1 (red):** GAP-01 re-introduced, policy gate fired on `SC.L2-3.13.11`, branch protection blocked the merge
+- **PR #2 (green):** compliant change, gate passed, manual approval granted, signed evidence bundle uploaded to the vault
+
+### Layer 4 — OSCAL
+
+```bash
+trestle partial-object-validate -f oscal/components/patient-intake-component.json --element component-definition
+trestle partial-object-validate -f oscal/profiles/patient-intake-profile.json --element profile
+```
+
+Expected: `VALID` on both.
+
+### Evidence vault
+
+Signed bundles are stored under S3 Object Lock (COMPLIANCE mode):
+
+```bash
+aws s3 ls s3://acme-health-intake-evidence-6a1ed244/bundles/ --recursive
+```
+
+Each bundle has a `.tar.gz`, a `.sig` (Cosign signature), and a `.pem` (signing certificate). Cosign verification, SHA-256 recompute, and Object Lock retention all hold against the most recent bundle.
+
+---
+
+## Repository layout
+
+```
+cgep-capstone/
+├── README.md                          # this file
+├── WRITEUP.md                         # design write-up
+├── GAPS.md                            # the eight named gaps (from starter)
+├── FRAMEWORKS.md                      # framework primers (from starter)
+├── WORKLOAD.md                        # what the API does (from starter)
+├── Makefile                           # make deploy | test | destroy
+├── terraform/                         # Layer 1 — GRC baseline + gap-closing overrides
+├── policies/                          # Layer 2 — five Rego policies + tests
+├── .github/workflows/                 # Layer 3 — pr.yml and apply.yml
+└── oscal/
+    ├── components/
+    │   └── patient-intake-component.json
+    └── profiles/
+        └── patient-intake-profile.json
+```

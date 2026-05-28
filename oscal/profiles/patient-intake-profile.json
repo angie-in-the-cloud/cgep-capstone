@@ -1,0 +1,60 @@
+{
+  "profile": {
+    "uuid": "4fd3b3ec-82d9-4e77-a4e1-b34d77df7aee",
+    "metadata": {
+      "title": "Acme Health Patient Intake API - Control Profile",
+      "last-modified": "2026-05-28T00:00:00.000+00:00",
+      "version": "1.0.0",
+      "oscal-version": "1.2.1",
+      "roles": [
+        { "id": "author", "title": "Document Author" }
+      ],
+      "parties": [
+        {
+          "uuid": "6c85946c-e009-41c4-9769-3e57388522c8",
+          "type": "person",
+          "name": "Angeline Williams"
+        }
+      ],
+      "responsible-parties": [
+        {
+          "role-id": "author",
+          "party-uuids": ["6c85946c-e009-41c4-9769-3e57388522c8"]
+        }
+      ]
+    },
+    "imports": [
+      {
+        "href": "#557c0296-45c8-43c8-be3c-48d927bbd1be",
+        "include-controls": [
+          {
+            "with-ids": [
+              "SP_800_171_03.01.05",
+              "SP_800_171_03.03.01",
+              "SP_800_171_03.08.09",
+              "SP_800_171_03.13.01",
+              "SP_800_171_03.13.08",
+              "SP_800_171_03.13.11",
+              "SP_800_171_03.14.06"
+            ]
+          }
+        ]
+      }
+    ],
+    "merge": {
+      "as-is": true
+    },
+    "back-matter": {
+      "resources": [
+        {
+          "uuid": "557c0296-45c8-43c8-be3c-48d927bbd1be",
+          "title": "NIST SP 800-171 Revision 3 Control Catalog (OSCAL)",
+          "description": "Official NIST OSCAL representation of the SP 800-171 Rev. 3 catalog. CMMC Level 2 inherits its practices from this catalog. Control IDs in this profile correspond to the catalog's identifiers (e.g., SP_800_171_03.13.11 maps to CMMC L2 practice SC.L2-3.13.11).",
+          "rlinks": [
+            { "href": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-171/rev3/json/NIST_SP800-171_rev3_catalog.json" }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,200 @@
+{
+  "component-definition": {
+    "uuid": "3ac9a0a0-8967-4782-a02b-2f265acf03bb",
+    "metadata": {
+      "title": "Acme Health Patient Intake API",
+      "last-modified": "2026-05-28T00:00:00.000+00:00",
+      "version": "1.0.0",
+      "oscal-version": "1.2.1",
+      "roles": [
+        { "id": "author", "title": "Document Author" },
+        { "id": "system-owner", "title": "System Owner" },
+        { "id": "provider", "title": "Component Provider" }
+      ],
+      "parties": [
+        {
+          "uuid": "6c85946c-e009-41c4-9769-3e57388522c8",
+          "type": "person",
+          "name": "Angeline Williams"
+        },
+        {
+          "uuid": "b988e42a-ee0d-4db3-80c4-97e7cdd76d97",
+          "type": "organization",
+          "name": "Acme Health"
+        }
+      ],
+      "responsible-parties": [
+        {
+          "role-id": "author",
+          "party-uuids": ["6c85946c-e009-41c4-9769-3e57388522c8"]
+        },
+        {
+          "role-id": "system-owner",
+          "party-uuids": ["b988e42a-ee0d-4db3-80c4-97e7cdd76d97"]
+        }
+      ]
+    },
+    "components": [
+      {
+        "uuid": "21c71cba-2fda-49ea-af35-28e6ff0fdb0e",
+        "type": "service",
+        "title": "Acme Health Patient Intake API",
+        "description": "The Patient Intake API is the inherited workload from Acme Health's engineering team. This component definition describes the GRC engineering controls wrapped around it - Terraform baseline, OPA policy gates, signed evidence pipeline - that bring the workload into alignment with CMMC Level 2 (inheriting from NIST SP 800-171).",
+        "purpose": "Receive patient intake submissions via HTTPS API, persist them to DynamoDB, and store uploaded documents in S3, with CMMC Level 2 controls enforced through infrastructure-as-code and policy-as-code.",
+        "props": [
+          { "name": "aws-account-id", "value": "399966706844" },
+          { "name": "aws-region", "value": "us-east-1" },
+          { "name": "repository", "value": "https://github.com/angie-in-the-cloud/cgep-capstone" }
+        ],
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": ["6c85946c-e009-41c4-9769-3e57388522c8"]
+          }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "2a69eb62-2f79-4372-a868-56834fdae56e",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-171/rev3/json/NIST_SP800-171_rev3_catalog.json",
+            "description": "Implementation of NIST SP 800-171 Rev. 3 controls (the catalog that CMMC Level 2 inherits from) for the Patient Intake API. Control IDs in policy enforcement messages use CMMC Level 2 nomenclature (e.g., SC.L2-3.13.11); these correspond to the Rev. 3 catalog IDs below (e.g., 03.13.11). The numeric portion is identical across both revisions.",
+            "implemented-requirements": [
+              {
+                "uuid": "cac52d7f-ebe1-4489-88a2-199f9684f446",
+                "control-id": "SP_800_171_03.13.11",
+                "description": "Customer-managed CMK encryption is enforced on both the S3 uploads bucket (CUI documents) and the DynamoDB intake table (CUI form data). A KMS key with annual rotation enabled is provisioned in Terraform. The Rego policy s3_kms_encryption.rego fails the policy gate if sse_algorithm is not aws:kms. The Rego policy dynamodb_kms_encryption.rego fails the policy gate if the table's server_side_encryption.kms_key_arn is empty. This implementation closes GAP-01 (S3 SSE-S3 default) and GAP-02 (DynamoDB AWS-owned key default).",
+                "props": [
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_server_side_encryption_configuration.uploads" },
+                  { "name": "terraform-resource", "value": "aws_dynamodb_table.intake" },
+                  { "name": "terraform-resource", "value": "aws_kms_key.cui" },
+                  { "name": "enforcement-policy", "value": "policies/s3_kms_encryption.rego" },
+                  { "name": "enforcement-policy", "value": "policies/dynamodb_kms_encryption.rego" },
+                  { "name": "gap-closed", "value": "GAP-01" },
+                  { "name": "gap-closed", "value": "GAP-02" }
+                ],
+                "links": [
+                  { "href": "#b29dc9e7-7d00-4c01-8d10-75e8be822187", "rel": "evidence" }
+                ]
+              },
+              {
+                "uuid": "d7317297-9f43-4456-9871-f105d6172ee7",
+                "control-id": "SP_800_171_03.13.08",
+                "description": "A bucket policy on the S3 uploads bucket denies any request where aws:SecureTransport is false, blocking non-TLS access to CUI in transit and at rest. The Rego policy s3_tls_enforcement.rego fails the policy gate if no Deny statement conditioned on aws:SecureTransport = false is present. This implementation closes GAP-03 (missing TLS-enforcement bucket policy).",
+                "props": [
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_policy.uploads_tls" },
+                  { "name": "enforcement-policy", "value": "policies/s3_tls_enforcement.rego" },
+                  { "name": "gap-closed", "value": "GAP-03" }
+                ],
+                "links": [
+                  { "href": "#b29dc9e7-7d00-4c01-8d10-75e8be822187", "rel": "evidence" }
+                ]
+              },
+              {
+                "uuid": "feef56e3-dc3d-4379-bbe8-a6fb7878750e",
+                "control-id": "SP_800_171_03.08.09",
+                "description": "S3 versioning is enabled on the uploads bucket, preserving prior object versions when overwritten or deleted. This provides cryptographic-protected backup of CUI documents under the customer CMK declared in 03.13.11. This control is implemented in Terraform only; no Rego policy gates re-introduction of the gap. This implementation closes GAP-04 (no versioning on uploads bucket).",
+                "props": [
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_versioning.uploads" },
+                  { "name": "enforcement-policy", "value": "terraform-only" },
+                  { "name": "gap-closed", "value": "GAP-04" }
+                ],
+                "links": [
+                  { "href": "#b29dc9e7-7d00-4c01-8d10-75e8be822187", "rel": "evidence" }
+                ]
+              },
+              {
+                "uuid": "aa77be3f-268a-427e-b2d8-336ebf8db5ba",
+                "control-id": "SP_800_171_03.13.01",
+                "description": "The intake Lambda is deployed inside the VPC the starter provisions, with a dedicated security group restricting egress, and VPC endpoints for S3, DynamoDB, KMS, and CloudWatch Logs so that traffic to AWS services does not leave the VPC. The Rego policy lambda_vpc.rego fails the policy gate if the Lambda's vpc_config is empty or has no subnet_ids. This implementation closes GAP-05 (Lambda outside VPC).",
+                "props": [
+                  { "name": "terraform-resource", "value": "aws_lambda_function.intake" },
+                  { "name": "terraform-resource", "value": "aws_security_group.lambda" },
+                  { "name": "terraform-resource", "value": "aws_vpc.main" },
+                  { "name": "enforcement-policy", "value": "policies/lambda_vpc.rego" },
+                  { "name": "gap-closed", "value": "GAP-05" }
+                ],
+                "links": [
+                  { "href": "#b29dc9e7-7d00-4c01-8d10-75e8be822187", "rel": "evidence" }
+                ]
+              },
+              {
+                "uuid": "b1b3bfc0-a0af-4880-8033-18397a997442",
+                "control-id": "SP_800_171_03.14.06",
+                "description": "Lambda invocations are monitored through two complementary mechanisms: an SQS dead-letter queue captures failed asynchronous invocations for inspection, and AWS X-Ray tracing produces distributed trace data for every invocation. Reserved concurrency is documented in the WRITEUP. This control is implemented in Terraform only; no Rego policy gates re-introduction of the gap. This implementation closes GAP-06 (no DLQ, reserved concurrency, or X-Ray).",
+                "props": [
+                  { "name": "terraform-resource", "value": "aws_sqs_queue.intake_dlq" },
+                  { "name": "terraform-resource", "value": "aws_iam_role_policy_attachment.lambda_xray" },
+                  { "name": "enforcement-policy", "value": "terraform-only" },
+                  { "name": "gap-closed", "value": "GAP-06" }
+                ],
+                "links": [
+                  { "href": "#b29dc9e7-7d00-4c01-8d10-75e8be822187", "rel": "evidence" }
+                ]
+              },
+              {
+                "uuid": "a422a931-bb3e-49ae-a9a2-ed13e8b096e9",
+                "control-id": "SP_800_171_03.01.05",
+                "description": "The Lambda execution role's inline policy grants only the specific DynamoDB and S3 actions the function calls (PutItem, GetItem, PutObject, GetObject), scoped to the intake table and uploads bucket. The Rego policy iam_no_wildcard.rego fails the policy gate if any role policy statement contains a wildcard action (* or service:*). The pipeline role is explicitly scoped out of this policy because it requires broad enumerated actions to plan and apply Terraform. This implementation closes GAP-07 (overbroad dynamodb:* / s3:* role permissions).",
+                "props": [
+                  { "name": "terraform-resource", "value": "aws_iam_role_policy.lambda_inline" },
+                  { "name": "enforcement-policy", "value": "policies/iam_no_wildcard.rego" },
+                  { "name": "gap-closed", "value": "GAP-07" }
+                ],
+                "links": [
+                  { "href": "#b29dc9e7-7d00-4c01-8d10-75e8be822187", "rel": "evidence" }
+                ]
+              },
+              {
+                "uuid": "6dc82da0-aa2f-4afb-bfeb-c03a45310680",
+                "control-id": "SP_800_171_03.03.01",
+                "description": "API Gateway access logging is enabled on the default stage, writing structured request logs to a dedicated CloudWatch log group. Every API request to the Patient Intake API generates an audit record at the application layer. This control is implemented in Terraform only; no Rego policy gates re-introduction of the gap. This implementation partially closes GAP-08 (no API Gateway access logging).",
+                "props": [
+                  { "name": "terraform-resource", "value": "aws_cloudwatch_log_group.api_access" },
+                  { "name": "terraform-resource", "value": "aws_apigatewayv2_stage.default" },
+                  { "name": "enforcement-policy", "value": "terraform-only" },
+                  { "name": "gap-closed", "value": "GAP-08 (application layer)" }
+                ],
+                "links": [
+                  { "href": "#b29dc9e7-7d00-4c01-8d10-75e8be822187", "rel": "evidence" }
+                ]
+              },
+              {
+                "uuid": "f0e1c8d5-8e7a-4a91-9a3f-2b1c9d4e8f1a",
+                "control-id": "SP_800_171_03.03.01",
+                "description": "A dedicated CloudTrail trail captures multi-region management-plane API calls with log-file validation enabled, writing to an isolated S3 bucket with TLS-enforcement and public-access-block. This generates an audit record at the AWS control plane for every change to the system's resources. CloudTrail addresses a different audit layer than API Gateway access logging (control-plane vs application-plane) and is documented as a separate implementation of the same control.",
+                "props": [
+                  { "name": "terraform-resource", "value": "aws_cloudtrail.main" },
+                  { "name": "terraform-resource", "value": "aws_s3_bucket.cloudtrail" },
+                  { "name": "enforcement-policy", "value": "terraform-only" },
+                  { "name": "gap-closed", "value": "control-plane audit baseline" }
+                ],
+                "links": [
+                  { "href": "#b29dc9e7-7d00-4c01-8d10-75e8be822187", "rel": "evidence" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "back-matter": {
+      "resources": [
+        {
+          "uuid": "42cfb929-2ccd-469f-b139-3a9dd867ab78",
+          "title": "Signed evidence bundle - commit 833ec01 (initial baseline apply)",
+          "description": "Cosign-signed evidence bundle produced by the initial Terraform apply on commit 833ec015157861de3dcd2ff2f9d683afbc4cecf5. Contains tfplan.json, policy-results.json, apply.log, state-hash.txt, and manifest.json. Stored under S3 Object Lock in COMPLIANCE mode with 1-day retention.",
+          "rlinks": [
+            { "href": "s3://acme-health-intake-evidence-6a1ed244/bundles/evidence-833ec015157861de3dcd2ff2f9d683afbc4cecf5-20260527T215400Z.tar.gz" }
+          ]
+        },
+        {
+          "uuid": "b29dc9e7-7d00-4c01-8d10-75e8be822187",
+          "title": "Signed evidence bundle - commit 3901ca7 (green PR merge)",
+          "description": "Cosign-signed evidence bundle produced by the manual-gated apply after the green PR merged to main on commit 3901ca7ebaa4bd319e96624091d3ace570565433. This bundle represents the current state of the deployed system and is the evidence source for all implementation statements above.",
+          "rlinks": [
+            { "href": "s3://acme-health-intake-evidence-6a1ed244/bundles/evidence-3901ca7ebaa4bd319e96624091d3ace570565433-20260527T224940Z.tar.gz" }
+          ]
+        }
+      ]
+    }
+  }
+}

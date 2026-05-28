@@ -17,6 +17,7 @@ on:
       - 'terraform/**'
       - 'policies/**'
       - '.github/workflows/pr.yml'
+      - 'oscal/**'
 
 # OIDC needs write on id-token; everything else stays read.
 permissions:

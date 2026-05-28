@@ -181,3 +181,5 @@ The evidence vault currently uses a 1-day Object Lock retention period as a caps
 ## 7. Limitations
 
 The evidence vault is in the same AWS account as the workload, retention is set to 1 day rather than a production schedule, and reserved concurrency was not configured on the Lambda because the sandbox concurrency ceiling does not allow it. Each of these is documented in the relevant section above. A real Acme Health deployment would separate the vault into a dedicated account, set retention to seven years, and set reserved concurrency once production load data is available.
+
+The build also does not include a continuous monitoring or detection layer. CloudTrail captures control-plane events and API Gateway access logging captures application requests, but no detection logic reacts to those events in real time. A production deployment would add CloudWatch metric filters and alarms targeting high-risk events (root account usage, IAM policy changes, KMS key deletion, CloudTrail configuration changes), routed to an SNS topic for alert delivery, converting the audit trail from a forensic record into a real-time detection layer.
